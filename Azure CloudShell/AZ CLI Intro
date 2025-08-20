@@ -1,0 +1,123 @@
+If you want to use exisiting Resourcce group then use any method - 1 & 2
+========================================================================
+#Method 1: Azure CLI Query with --query and --output tsv
+
+read RG RLoc < <(az group list --query "[0].[name,location]" -o tsv)
+
+echo $RG   # Should print: 1-65dcf0a1-playground-sandbox
+echo $RLoc # Should print: westus
+
+========================================================================
+#Method 2: Using jq for More Flexible JSON Parsing
+
+RG=$(az group list | jq -r '..name')
+RLoc=$(az group list | jq -r '..location')
+
+echo $RG   # Should print: 1-65dcf0a1-playground-sandbox
+echo $RLoc # Should print: westus
+
+========================================================================
+
+# Define variables
+RG=1-65dcf0a1-playground-sandbox
+RLoc=westus
+
+# Create Resource Group
+echo "Creating Azure Resource Group"
+az group create -l $RLoc -n $RG
+
+# Create a VNET
+echo "Creating $RG-vNET in $RG"
+az network vnet create \
+    -g $RG \
+    -n $RG-vNET \
+    --address-prefix 10.0.0.0/16 \
+    --location $RLoc
+
+# Create Subnet in existing VNet
+echo "Creating $RG-Subnet-1 in $RG-vNET"
+az network vnet subnet create \
+    --resource-group $RG \
+    --vnet-name $RG-vNET \
+    --name $RG-Subnet-1 \
+    --address-prefixes 10.0.1.0/24
+
+# Create NSG
+echo "Creating NSG for $RG-Subnet-1"
+az network nsg create --resource-group $RG --name $RG-NSG
+
+#destination-port-ranges-Allow traffic
+#22-SSH, 3389-RDP, *-All, 21-FTP, 23-Telnet, 8080-Jenkins
+# 9090 -Prometheus, 9000-SonarQube
+
+# Create NSG Rule - Allow All Inbound Traffic
+echo "Creating NSG Rule for $RG-NSG"
+az network nsg rule create \
+    --resource-group $RG \
+    --nsg-name $RG-NSG \
+    --name AllowAllInbound \
+    --priority 100 \
+    --access Allow \
+    --description "Allow all inbound traffic from all Sources" \
+    --destination-address-prefixes '*' \
+    --destination-port-ranges '*' \
+    --direction Inbound \
+    --source-address-prefixes '*' \
+    --protocol '*'
+
+# Associate NSG with Subnet
+echo "Updating $RG-NSG Rules on $RG-Subnet-1"
+az network vnet subnet update \
+    --resource-group $RG \
+    --vnet-name $RG-vNET \
+    --name $RG-Subnet-1 \
+    --network-security-group $RG-NSG
+
+# Create Public IP
+echo "Creating Public IP"
+az network public-ip create \
+    --name $RG-MyPublicIP \
+    --resource-group $RG \
+    --allocation-method Static
+
+# Wait a few seconds to ensure the Public IP is fully created
+sleep 10
+
+# Verify Public IP creation
+echo "Verifying Public IP creation for $RG-MyPublicIP"
+az network public-ip show \
+    --resource-group $RG \
+    --name $RG-MyPublicIP \
+    --output table
+
+# Create Network Interface
+echo "Creating Network Interface"
+az network nic create \
+    --resource-group $RG \
+    --name $RG-WIN1-NIC \
+    --vnet-name $RG-vNET \
+    --subnet $RG-Subnet-1 \
+    --private-ip-address 10.0.1.10 \
+    --public-ip-address $RG-MyPublicIP
+
+# List all the VM Images in table format
+az vm image list --output table
+
+# Images
+# ['CentOS85Gen2', 'Debian11', 'FlatcarLinuxFreeGen2', 'OpenSuseLeap154Gen2', 'RHELRaw8LVMGen2', 'SuseSles15SP3', 'Ubuntu2204', 'Win2022Datacenter',
+#  'Win2022AzureEditionCore', 'Win2019Datacenter', 'Win2016Datacenter', 'Win2012R2Datacenter', 'Win2012Datacenter'].
+
+# Create Windows VM
+echo "Creating Windows VM"
+az vm create \
+    --resource-group $RG \
+    --name WIN-001 \
+    --image Win2019Datacenter \
+    --vnet-name $RG-vNET \
+    --subnet $RG-Subnet-1 \
+    --admin-username vamsi \
+    --admin-password "India@123456" \
+    --size Standard_B1s \
+    --nsg $RG-NSG \
+    --private-ip-address 10.0.1.10 \
+    --os-disk-size-gb 50 # Optional: default size is 127GB if not specified. It will give error, if it is lessthan default size.
